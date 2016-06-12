@@ -1,0 +1,2 @@
+#!/bin/sh
+python -m tests.capture_video #row-assist.py

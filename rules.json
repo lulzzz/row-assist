@@ -1,0 +1,75 @@
+{
+    "P" : {
+        "range" : [-160, 161, 1],
+        "memberships" : {           
+            "aligned" : {
+                "mf" : "tri",
+                "shp" : [-30, 0, 30]
+            },
+            "under" : {
+                "mf" : "trap",
+                "shp" : [-160, -160, -30, -10]
+            },
+            "over" : {
+                "mf" : "trap",
+                "shp" : [10, 30, 160, 160]
+            }
+        },
+        "rules" : []
+    },
+    "I" : {
+        "range" : [-160, 161, 1],
+        "memberships" : {
+            "drifting" : {
+                "mf" : "trap",
+                "shp" : [-160, -160, -60, -15]
+            },
+            "closing" : {
+                "mf" : "trap",
+                "shp" : [15, 60, 160, 160]
+            },
+            "holding" : {
+                "mf" : "tri",
+                "shp" : [-30,0,30]
+            }
+        },
+        "rules" : []
+    },
+    "D" : false,
+    "C" : {
+        "range" : [-160, 161, 1],
+        "memberships" : {
+            "bad-left" : {
+                "mf" : "trap",
+                "shp" : [-160, -160, -80, -15]
+            },
+            "neutral-left" : {
+                "mf" : "tri",
+                "shp" : [-30, -25, 0]
+            },
+            "bad-right" : {
+                "mf" : "trap",
+                "shp" : [15, 80, 160, 160]
+            },
+            "neutral-right" : {
+                "mf" : "tri",
+                "shp" : [0, 25, 30]
+            },
+            "good" : {
+                "mf" : "gauss",
+                "shp" : [0, 2]
+            }
+        },  
+        "rules" : [
+            ["closing", "under", "good"],
+            ["closing", "over", "bad-left"],
+            ["closing", "aligned", "neutral-left"],
+            ["holding", "under", "neutral-left"],
+            ["holding", "over", "neutral-right"],
+            ["holding", "aligned", "good"],
+            ["drifting", "under", "bad-right"],
+            ["drifting", "over", "good"],
+            ["drifting", "aligned", "neutral-right"]
+        ] 
+    }
+}
