@@ -64,7 +64,7 @@ class RowAssist:
         self.run_threads = True
         self.init_log() # it's best to run the log first to catch all events
         self.init_camera()
-        #self.init_cv_groundspeed()
+        self.init_cv_groundspeed()
         self.init_stepper()
         self.init_controller()
         self.init_pid()
@@ -153,8 +153,7 @@ class RowAssist:
         # Initialize variables
         try:
             self.estimated = 0
-            self.differential = 0
-            self.average = 0
+            self.projected = 0
             self.pretty_print('PID', 'Default number of samples: %d' % self.NUM_SAMPLES)
             self.offset_history = [0] * self.NUM_SAMPLES
             self.pretty_print('PID', 'Setup OK')
@@ -370,11 +369,18 @@ class RowAssist:
                 self.offset_history.pop(0)
             smoothed_values = sig.savgol_filter(self.offset_history, self.T_COEF, 2)
 
+            # Estimated
             e = int(smoothed_values[-1]) # get latest
+            if e > self.CAMERA_WIDTH / 2: e = (self.CAMERA_WIDTH / 2) - 1 
+            elif e < -self.CAMERA_WIDTH / 2: e = -self.CAMERA_WIDTH / 2
+
+            # Projected
             f = np.polyfit(t, smoothed_values[-self.T_COEF:], deg=self.REGRESSION_DEG)
             vals = np.polyval(f, t_plus)
             de = vals[-1] # differential error
             ie = int(np.mean(vals)) # integral error
+            if ie > self.CAMERA_WIDTH / 2 - 1: ie = (self.CAMERA_WIDTH / 2) -1
+            elif ie < -self.CAMERA_WIDTH / 2: ie = -self.CAMERA_WIDTH / 2
         except Exception as error:
             self.pretty_print("ROW", "Error: %s" % str(error))
         return e, ie, de
@@ -444,7 +450,7 @@ class RowAssist:
         return phi_target
 
     ## Get Groundspeed
-    def get_grounspeed(self, images):
+    def get_groundspeed(self, images):
         """ Get the current groundspeed """
         return self.cv_speed # Return current speed
     
@@ -533,9 +539,14 @@ class RowAssist:
                 try:
                     bgr = self.bgr
                     bgr[:, self.CAMERA_WIDTH / 2,:] = 255
-                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 0] = 255
-                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 1] = 0
+                    # draw estimated position
+                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 0] = 0
+                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 1] = 255
                     bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 2] = 0
+                    # draw projected position
+                    bgr[:,self.projected + self.CAMERA_WIDTH / 2, 0] = 0
+                    bgr[:,self.projected + self.CAMERA_WIDTH / 2, 1] = 0
+                    bgr[:,self.projected + self.CAMERA_WIDTH / 2, 2] = 255
                     cv2.imshow("test", bgr)
                     if cv2.waitKey(5) == 27:
                         pass
@@ -600,7 +611,7 @@ class RowAssist:
                 a = time.time()
                 bgr = self.capture_image()
                 if bgr is not None:
-                    cv_speed = self.get_grounspeed(bgr)
+                    cv_speed = self.get_groundspeed(bgr)
                     mask = self.plant_filter(bgr)
                     offset = self.find_offset(mask)
                     (est, avg, diff) = self.estimate_error(offset)
@@ -638,12 +649,11 @@ class RowAssist:
                     self.bgr = bgr
                     self.mask = mask
                     self.estimated = est
-                    self.differential = diff
-                    self.average = avg
+                    self.projected = avg
                     b = time.time()
                     if self.VERBOSE:
-                        self.pretty_print("STEP", "%d Hz\t%d stp\t%d mm\t%2.1f d\t%0.2f d/s" % ((1 / float(b-a)),
-                                                                                                 int(output),
+                        self.pretty_print("STEP", "%d Hz\t%2.1f km/h\t%d mm\t%2.1f d\t%0.2f d/s" % ((1 / float(b-a)),
+                                                                                                 cv_speed,
                                                                                                  est,
                                                                                                  encoder * 360 / float(self.ENCODER_RESOLUTION),
                                                                                                  encoder_rate * 360 / float(self.ENCODER_RESOLUTION)))
