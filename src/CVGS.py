@@ -11,24 +11,17 @@ __author__ = 'Trevor Stanhope'
 __version__ = '1.0-alpha'
 
 import scipy.cluster.hierarchy as hcluster
-import pango
 import shutil
 import cv2, cv
 import numpy as np
 import time
 import sys
-from matplotlib import pyplot as plt
 from itertools import cycle
-import zmq
-import json
 from datetime import datetime
 import gps as gpsd
 import os
 import thread
 import serial
-import pygtk
-pygtk.require('2.0')
-import gtk
 
 class CVGS:
     """

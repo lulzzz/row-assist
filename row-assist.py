@@ -9,13 +9,13 @@ __author__ = 'Trevor Stanhope'
 __version__ = '1.0'
 
 ## Libraries
+import Image
 import cv2, cv
 from src import CVGS
 import serial
 import json, ast
 import numpy as np
 import scipy.signal as sig
-from matplotlib import pyplot as plt
 import thread
 import gps
 import sys, os, time
@@ -63,13 +63,14 @@ class RowAssist:
         # Initializers
         self.run_threads = True
         self.init_log() # it's best to run the log first to catch all events
-        self.init_cameras()
-        self.init_cv_groundspeed()
+        self.init_camera()
+        #self.init_cv_groundspeed()
         self.init_stepper()
         self.init_controller()
         self.init_pid()
         self.init_gps()
         self.init_qlearner()
+        self.init_display()
 
     ## Initialize Display
     def init_display(self):
@@ -102,15 +103,13 @@ class RowAssist:
         except Exception as e:
             raise e
                 
-    # Initialize Cameras
-    def init_cameras(self):
+    # Initialize Camera
+    def init_camera(self):
         """
         Initialize Camera
         """
         # Setting variables
         self.pretty_print('CAM', 'Initializing CV Variables ...')
-        if self.CAMERA_ROTATED:
-            self.CAMERA_HEIGHT, self.CAMERA_WIDTH = self.CAMERA_WIDTH, self.CAMERA_HEIGHT # flip dimensions if rotated
         self.CAMERA_CENTER = self.CAMERA_WIDTH / 2
         self.pretty_print('CAM', 'Camera Width: %d px' % self.CAMERA_WIDTH)
         self.pretty_print('CAM', 'Camera Height: %d px' % self.CAMERA_HEIGHT)
@@ -133,43 +132,35 @@ class RowAssist:
         self.threshold_max = np.array([self.HUE_MAX, self.SAT_MAX, self.VAL_MAX], np.uint8)
         
         # Attempt to set each camera index/name
-        self.pretty_print('CAM', 'Initializing Cameras')
-        self.cameras = [None] * self.CAMERAS
-        self.images = [None] * self.CAMERAS
-        self.masks = [None] * self.CAMERAS
-        for i in range(self.CAMERAS):
-            try:
-                self.pretty_print('CAM', 'Attaching Camera #%d' % i)
-                cam = cv2.VideoCapture(i)
-                cam.set(cv.CV_CAP_PROP_SATURATION, self.CAMERA_SATURATION)
-                if not self.CAMERA_ROTATED:
-                    cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
-                    cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
-                else:
-                    cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_HEIGHT)
-                    cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_WIDTH)
-                (s, bgr) = cam.read()
-                self.images[i] = bgr
-                self.cameras[i] = cam
-                self.pretty_print('CAM', 'Camera #%d OK' % i)
-            except Exception as error:
-                self.pretty_print('CAM', 'ERROR: %s' % str(error))
+        self.pretty_print('CAM', 'Initializing Camera ...')
+        self.camera = None
+        self.bgr = None
+        self.mask = None
+        try:
+            cam = cv2.VideoCapture(0)
+            cam.set(cv.CV_CAP_PROP_SATURATION, self.CAMERA_SATURATION)
+            cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, self.CAMERA_HEIGHT)
+            cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, self.CAMERA_WIDTH)
+            (s, bgr) = cam.read()
+            self.bgr = bgr
+            self.camera = cam
+        except Exception as error:
+            self.pretty_print('CAM', 'ERROR: %s' % str(error))
     
     # Initialize PID Controller
     def init_pid(self):
         self.pretty_print('PID', 'Initializing Control System')
         # Initialize variables
         try:
+            self.estimated = 0
+            self.differential = 0
+            self.average = 0
             self.pretty_print('PID', 'Default number of samples: %d' % self.NUM_SAMPLES)
             self.offset_history = [0] * self.NUM_SAMPLES
             self.pretty_print('PID', 'Setup OK')
         except Exception as error:
             self.pretty_print('PID', 'ERROR: %s' % str(error))
-        self.average = 0
-        self.hist = [0] * 20
-        self.estimated = 0
-        self.output = 0
-
+        
         # Generate control sys
         if self.ALGORITHM == 'PID':
             self.sys = fpid.PID(P=self.P_COEF, I=self.I_COEF, D=self.D_COEF)
@@ -303,67 +294,47 @@ class RowAssist:
         self.qmatrix[ph1,e,:] = self.qmatrix[ph1,e,:] + group
         return group
 
-    ## Capture Images
-    def capture_images(self):
+    ## Capture Image
+    def capture_image(self):
         """
         1. Attempt to capture an image
         2. Repeat for each capture interface
         """
-        images = []
-        for i in range(self.CAMERAS):
-            try:
-                (s, bgr) = self.cameras[i].read()
-                if s and (self.images[i] is not None):
-                    if self.CAMERA_ROTATED: bgr = cv2.transpose(bgr)
-                    if np.all(bgr==self.images[i]):
-                        images.append(None)
-                        self.pretty_print('CAM', 'ERROR: Frozen frame')
-                    else:
-                        images.append(bgr)
-                else:
-                    self.pretty_print('CAM', 'ERROR: Capture failed')
-                    self.cameras[i].release()
-                    self.cameras[i] = cv2.VideoCapture(i)
-                    (s, bgr) = self.cameras[i].read()
-                    if s:
-                        images.append(bgr)
-                    else:
-                        images.append(None)
-            except KeyboardInterrupt:
-                raise KeyboardInterrupt
-            except:
-                images.append(None)
+        try:
+            (s, bgr) = self.camera.read()
+            if s is False:
+                self.pretty_print('CAM', 'ERROR: Capture failed')
+                bgr = None
+        except KeyboardInterrupt:
+            raise KeyboardInterrupt
+        except Exception as e:
+            raise e
         self.bgr2 = self.bgr1 
-        self.bgr1 = images[0] # Update the BGR
-        return images
+        self.bgr1 = bgr # Update the BGR
+        return bgr
 
     ## Plant Segmentation Filter
-    def plant_filter(self, images):
+    def plant_filter(self, bgr):
         """
         1. RBG --> HSV
         2. Set minimum saturation equal to the mean saturation
         3. Set minimum value equal to the mean value
         4. Take hues within range from green-yellow to green-blue
-        """
-        masks = []
-        for bgr in images:
-            if bgr is not None:
-                try:
-                    bgr = np.rot90(bgr)
-                    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-                    self.threshold_min[1] = np.percentile(hsv[:,:,1], 100 * self.SAT_MIN / 256) # overwrite the saturation minima
-                    self.threshold_min[2] = np.percentile(hsv[:,:,2], 100 * self.VAL_MIN / 256) # overwrite the value minima
-                    mask = cv2.inRange(hsv, self.threshold_min, self.threshold_max)
-                    masks.append(mask)
-                except KeyboardInterrupt:
-                    raise KeyboardInterrupt
-                except Exception as e:
-                    raise e
-                masks.append(None)
-        return masks
+        """         
+        if bgr is not None:
+            try:
+                hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+                self.threshold_min[1] = np.percentile(hsv[:,:,1], 100 * self.SAT_MIN / 256) # overwrite the saturation minima
+                self.threshold_min[2] = np.percentile(hsv[:,:,2], 100 * self.VAL_MIN / 256) # overwrite the value minima
+                mask = cv2.inRange(hsv, self.threshold_min, self.threshold_max)
+            except KeyboardInterrupt:
+                raise KeyboardInterrupt
+            except Exception as e:
+                raise e
+        return mask
         
     ## Find Plants
-    def find_offset(self, masks):
+    def find_offset(self, mask):
         """
         1. Calculates the column summation of the mask
         2. Calculates the 95th percentile threshold of the column sum array
@@ -371,36 +342,36 @@ class RowAssist:
         4. Finds the median of this array of indices
         5. Repeat for each mask
         """
-        indices = []
-        for mask in masks:
-            if mask is not None:
-                try:
-                    column_sum = mask.sum(axis=0) # vertical summation            
-                    centroid = int(np.argmax(column_sum) - self.CAMERA_CENTER + self.CAMERA_OFFSET)                   
-                    indices.append(centroid)
-                except KeyboardInterrupt:
-                    raise KeyboardInterrupt
-                except Exception as error:
-                    self.pretty_print('OFF', '%s' % str(error))
-            else:
-                indices.append(self.CAMERA_OFFSET)
-        return indices
+        if mask is not None:
+            try:
+                column_sum = mask.sum(axis=0) # vertical summation            
+                centroid = int(np.argmax(column_sum) - self.CAMERA_CENTER + self.CAMERA_OFFSET)                   
+                idx = centroid
+            except KeyboardInterrupt:
+                raise KeyboardInterrupt
+            except Exception as error:
+                self.pretty_print('OFF', '%s' % str(error))
+        else:
+            idx = self.CAMERA_OFFSET
+        return idx
         
     ## Best Guess for row based on multiple offsets from indices
-    def estimate_error(self, indices):
+    def estimate_error(self, idx):
         """
         Calculate errors for estimate, average, and differential
         """
         try:
-            val = int(np.mean(indices))
+            t = range(0, self.T_COEF) # the time frame in the past
+            t_plus = range(self.T_COEF + 1, self.T_COEF *2) # the time frame in the future
+
+            val = int(idx)
             self.offset_history.append(val)
             while len(self.offset_history) > self.NUM_SAMPLES:
                 self.offset_history.pop(0)
-            sig.savitsky_golay(self.offset_history)[-1]
-            e = int(self.offset_history[-1]) # get latest
-            t = range(0, self.T_COEF) # the time frame in the past
-            t_plus = range(self.T_COEF + 1, self.T_COEF *2) # the time frame in the future
-            f = np.polyfit(t, self.offset_history[-self.T_COEF:], deg=self.REGRESSION_DEG)
+            smoothed_values = sig.savgol_filter(self.offset_history, self.T_COEF, 2)
+
+            e = int(smoothed_values[-1]) # get latest
+            f = np.polyfit(t, smoothed_values[-self.T_COEF:], deg=self.REGRESSION_DEG)
             vals = np.polyval(f, t_plus)
             de = vals[-1] # differential error
             ie = int(np.mean(vals)) # integral error
@@ -500,7 +471,7 @@ class RowAssist:
             data = [str(sample[k]) for k in self.log_params]
             newline = ','.join(data + ['\n'])
             self.log.write(newline)
-            self.vid_writer.write(self.images[0])
+            self.vid_writer.write(self.bgr)
         except KeyboardInterrupt:
             raise KeyboardInterrupt
         except Exception as e:
@@ -557,9 +528,19 @@ class RowAssist:
     def update_display(self):
         """ Flash BGR capture to user """
         try:
-            cv2.imshow('', self.images[0])
-            if cv2.waitKey(5) == 0:
-                pass
+            cv2.namedWindow("test")
+            while self.run_threads:
+                try:
+                    bgr = self.bgr
+                    bgr[:, self.CAMERA_WIDTH / 2,:] = 255
+                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 0] = 255
+                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 1] = 0
+                    bgr[:,self.estimated + self.CAMERA_WIDTH / 2, 2] = 0
+                    cv2.imshow("test", bgr)
+                    if cv2.waitKey(5) == 27:
+                        pass
+                except Exception as error:
+                    self.pretty_print('DISP', 'ERROR: %s' % str(error))
         except Exception as error:
             self.pretty_print('DISP', 'ERROR: %s' % str(error))
             
@@ -592,12 +573,10 @@ class RowAssist:
             self.controller.close() ## Disable Arduino
         except Exception as error:
             self.pretty_print('ARD', 'ERROR: %s' % str(error))
-        for i in range(len(self.cameras)):
-            try:
-                self.pretty_print('CAM', 'Closing Camera #%d ...' % i)
-                self.cameras[i].release() ## Disable cameras
-            except Exception as error:
-                self.pretty_print('CAM', 'ERROR: %s' % str(error))
+        try:
+            self.camera.release() ## Disable camera
+        except Exception as error:
+            self.pretty_print('CAM', 'ERROR: %s' % str(error))
         cv2.destroyAllWindows() ## Close windows
         
     ## Run  
@@ -605,10 +584,10 @@ class RowAssist:
         """
         Function for Run-time loop
         1. Get initial time
-        2. Capture images
+        2. Capture image
         3. Generate mask filter for plant matter
         4. Calculate indices of rows
-        5. Estimate row from both images
+        5. Estimate row from image
         6. Get number of samples
         7. Calculate lateral error after filtering
         8. Send output response to stepper
@@ -619,12 +598,12 @@ class RowAssist:
         while self.run_threads:
             try:
                 a = time.time()
-                images = self.capture_images()
-                if not all(i is None for i in images):
-                    cv_speed = self.get_grounspeed(images)
-                    masks = self.plant_filter(images)
-                    offsets = self.find_offset(masks)
-                    (est, avg, diff) = self.estimate_error(offsets)
+                bgr = self.capture_image()
+                if bgr is not None:
+                    cv_speed = self.get_grounspeed(bgr)
+                    mask = self.plant_filter(bgr)
+                    offset = self.find_offset(mask)
+                    (est, avg, diff) = self.estimate_error(offset)
                     encoder = self.encoder
                     encoder_rate = self.encoder_rate
                     encoder_rate_prev = self.encoder_rate_prev
@@ -633,7 +612,7 @@ class RowAssist:
                     self.encoder_rate_prev = encoder_rate
                     steps = self.set_stepper(output)
                     sample = {
-                        'offsets' : offsets, 
+                        'offset' : offset, 
                         'est' : est,
                         'avg' : avg,
                         'diff' : diff,
@@ -653,19 +632,15 @@ class RowAssist:
                             'gps_speed' : self.gps_speed
                         }
                         sample.update(gps_sample)
-                    if self.MONGO_ON:
-                        doc_id = self.write_to_db(sample)
                     if self.LOGFILE_ON:
                         self.write_to_log(sample)
                     self.output = output
-                    self.images = images
-                    self.masks = masks
+                    self.bgr = bgr
+                    self.mask = mask
+                    self.estimated = est
+                    self.differential = diff
+                    self.average = avg
                     b = time.time()
-                    if False : #images[0] is None:
-                        cv2.imshow('', np.array(images[0], np.uint8).copy())
-                        if cv2.waitKey(5) == 27:
-                            pass
-                    #self.update_display()
                     if self.VERBOSE:
                         self.pretty_print("STEP", "%d Hz\t%d stp\t%d mm\t%2.1f d\t%0.2f d/s" % ((1 / float(b-a)),
                                                                                                  int(output),

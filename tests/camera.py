@@ -15,19 +15,17 @@ camera.set(cv.CV_CAP_PROP_SATURATION, 1.0)
 camera.set(cv.CV_CAP_PROP_BRIGHTNESS, 0.5)
 camera.set(cv.CV_CAP_PROP_CONTRAST, 0.5)
 camera.set(cv.CV_CAP_PROP_GAIN, 0.5)
-#camera.set(cv.CV_CAP_PROP_EXPOSURE, 0.5)
-#camera.set(cv.CV_CAP_PROP_WHITE_BALANCE, 0.5)
 
 while True:
     try:
         (s, bgr) = camera.read()
-        bgr = np.rot90(bgr)
+        #bgr = np.rot90(bgr)
         if s:
             hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
             
             hue_min = HUE_MIN
             hue_max = HUE_MAX
-            sat_min = np.percentile(hsv[:,:,1], 50)
+            sat_min = np.percentile(hsv[:,:,1], 5)
             sat_max = 255
             val_min = np.percentile(hsv[:,:,2], 50)
             val_max = 255
