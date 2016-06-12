@@ -1,0 +1,6 @@
+temp
+*~
+*/*~
+logs/*.csv
+logs/*.avi
+*.pyc
